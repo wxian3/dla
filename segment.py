@@ -94,7 +94,7 @@ class SegList(torch.utils.data.Dataset):
             data.append(self.image_list[index])
         if self.out_size:
             data.append(torch.from_numpy(np.array(image.size, dtype=int)))
-        return tuple(data)
+        return data
 
     def __len__(self):
         return len(self.image_list)
@@ -248,7 +248,7 @@ def train(train_loader, model, criterion, optimizer, epoch,
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
-
+        
         # pdb.set_trace()
 
         if type(criterion) in [torch.nn.modules.loss.L1Loss,
@@ -331,8 +331,8 @@ def train_seg(args):
     if args.random_color:
         t.append(transforms.RandomJitter(0.4, 0.4, 0.4))
     t.extend([#transforms.RandomHorizontalFlip(),
-              transforms.ToTensor(),
-              normalize])
+              transforms.ToTensor()])
+              #normalize])
     train_loader = torch.utils.data.DataLoader(
         SegList(data_dir, 'train', transforms.Compose(t),
                 binary=(args.classes == 2)),
@@ -344,7 +344,7 @@ def train_seg(args):
             # transforms.RandomCrop(crop_size),
             # transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            normalize,
+            #normalize,
         ]), binary=(args.classes == 2)),
         batch_size=batch_size, shuffle=False, num_workers=num_workers,
         pin_memory=True
@@ -439,7 +439,8 @@ def save_output_images(predictions, filenames, output_dir, sizes=None):
     # pdb.set_trace()
     for ind in range(len(filenames)):
         pred = predictions[ind]
-        pred = np.transpose(pred, (1, 2, 0)) 
+        pred = np.transpose(pred, (1, 2, 0))
+        pred = pred * 255.0 
         im = Image.fromarray(pred.astype(np.uint8))
         #if sizes is not None:
         #    im = crop_image(im, sizes[ind])
@@ -618,7 +619,7 @@ def test_seg(args):
     t = []
     #if args.crop_size > 0:
     #    t.append(transforms.PadToSize(args.crop_size))
-    t.extend([transforms.ToTensor(), normalize])
+    t.extend([transforms.ToTensor()]) #normalize])
     if args.ms:
         data = SegListMS(data_dir, phase, transforms.Compose(t), scales)
     else:

@@ -397,7 +397,7 @@ class ToTensor(object):
             # print(img.size())
         img = img.float().div(255)
         if label is None:
-            return (img,)
+            return img
         else:
             return img, torch.LongTensor(np.array(label, dtype=np.int))
 
