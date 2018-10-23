@@ -73,6 +73,8 @@ class SegList(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         image = Image.open(join(self.data_dir, self.image_list[index]))
+        w, h = image.size
+        image = image.resize((int(w * 0.5), int(h * 0.5)),Image.BICUBIC)
         data = [image]
         if self.label_list is not None:
             label_map = Image.open(join(self.data_dir, self.label_list[index]))
@@ -82,7 +84,10 @@ class SegList(torch.utils.data.Dataset):
             data.append(label_map)
         if self.bbox_list is not None:
             data.append(Image.open(join(self.data_dir, self.bbox_list[index])))
-        data = list(self.transforms(*data))
+        
+        # data = list(self.transforms(*data))
+        data = list(self.transforms(d) for d in data)
+        
         if self.out_name:
             if self.label_list is None:
                 data.append(data[0][0, :, :])
@@ -218,8 +223,8 @@ class AverageMeter(object):
 def accuracy(output, target):
     """Computes the precision@k for the specified values of k"""
     # batch_size = target.size(0) * target.size(1) * target.size(2)
-    _, pred = output.max(1)
-    pred = pred.view(1, -1)
+    # _, pred = output.max(1)
+    pred = output.view(1, -1)
     target = target.view(1, -1)
     correct = pred.eq(target)
     correct = correct[target != 255]
@@ -309,7 +314,8 @@ def train_seg(args):
             np.array([1, args.edge_weight], dtype=np.float32))
         criterion = nn.NLLLoss2d(ignore_index=255, weight=weight)
     else:
-        criterion = nn.NLLLoss2d(ignore_index=255)
+        # criterion = nn.NLLLoss2d(ignore_index=255)
+        criterion = nn.MSELoss()
 
     criterion.cuda()
 
@@ -321,10 +327,10 @@ def train_seg(args):
         t.append(transforms.RandomRotate(args.random_rotate))
     if args.random_scale > 0:
         t.append(transforms.RandomScale(args.random_scale))
-    t.append(transforms.RandomCrop(crop_size))
+    # t.append(transforms.RandomCrop(crop_size))
     if args.random_color:
         t.append(transforms.RandomJitter(0.4, 0.4, 0.4))
-    t.extend([transforms.RandomHorizontalFlip(),
+    t.extend([#transforms.RandomHorizontalFlip(),
               transforms.ToTensor(),
               normalize])
     train_loader = torch.utils.data.DataLoader(
@@ -335,7 +341,7 @@ def train_seg(args):
     )
     val_loader = torch.utils.data.DataLoader(
         SegList(data_dir, 'val', transforms.Compose([
-            transforms.RandomCrop(crop_size),
+            # transforms.RandomCrop(crop_size),
             # transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize,
@@ -432,11 +438,14 @@ def save_output_images(predictions, filenames, output_dir, sizes=None):
     """
     # pdb.set_trace()
     for ind in range(len(filenames)):
-        im = Image.fromarray(predictions[ind].astype(np.uint8))
-        if sizes is not None:
-            im = crop_image(im, sizes[ind])
+        pred = predictions[ind]
+        pred = np.transpose(pred, (1, 2, 0)) 
+        im = Image.fromarray(pred.astype(np.uint8))
+        #if sizes is not None:
+        #    im = crop_image(im, sizes[ind])
         fn = os.path.join(output_dir, filenames[ind][:-4] + '.png')
         out_dir = split(fn)[0]
+        print(fn)
         if not exists(out_dir):
             os.makedirs(out_dir)
         im.save(fn)
@@ -480,32 +489,38 @@ def test(eval_data_loader, model, num_classes,
         data_time.update(time.time() - end)
         image_var = Variable(image, requires_grad=False, volatile=True)
         final = model(image_var)[0]
-        _, pred = torch.max(final, 1)
-        pred = pred.cpu().data.numpy()
+        # _, pred = torch.max(final, 1)
+        #h, w = image.size()[2:4]
+        #outputs = [final.data]
+        #pred = sum([resize_4d_tensor(out, w, h) for out in outputs])
+        pred = final.cpu().data.numpy()
         batch_time.update(time.time() - end)
-        prob = torch.exp(final)
+        #prob = torch.exp(final)
+        #print(pred.shape)
+        
         if save_vis:
             save_output_images(pred, name, output_dir, size)
-            if prob.size(1) == 2:
-                save_prob_images(prob, name, output_dir + '_prob', size)
-            else:
-                save_colorful_images(pred, name, output_dir + '_color',
-                                     CITYSCAPE_PALLETE)
+            #if prob.size(1) == 2:
+            #    save_prob_images(prob, name, output_dir + '_prob', size)
+            #else:
+            #    save_colorful_images(pred, name, output_dir + '_color',
+            #                         CITYSCAPE_PALLETE)
+        has_gt = False
         if has_gt:
             label = label.numpy()
             hist += fast_hist(pred.flatten(), label.flatten(), num_classes)
             print('===> mAP {mAP:.3f}'.format(
                 mAP=round(np.nanmean(per_class_iu(hist)) * 100, 2)))
-        end = time.time()
-        print('Eval: [{0}/{1}]\t'
+            end = time.time()
+            print('Eval: [{0}/{1}]\t'
               'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
               'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
               .format(iter, len(eval_data_loader), batch_time=batch_time,
                       data_time=data_time))
-    ious = per_class_iu(hist) * 100
-    print(' '.join('{:.03f}'.format(i) for i in ious))
-    if has_gt:  # val
-        return round(np.nanmean(ious), 2)
+            ious = per_class_iu(hist) * 100
+            print(' '.join('{:.03f}'.format(i) for i in ious))
+        if has_gt:  # val
+            return round(np.nanmean(ious), 2)
 
 
 def resize_4d_tensor(tensor, width, height):
@@ -601,8 +616,8 @@ def test_seg(args):
     # scales = [0.5, 0.75, 1.25, 1.5, 1.75]
     scales = [0.5, 0.75, 1.25, 1.5]
     t = []
-    if args.crop_size > 0:
-        t.append(transforms.PadToSize(args.crop_size))
+    #if args.crop_size > 0:
+    #    t.append(transforms.PadToSize(args.crop_size))
     t.extend([transforms.ToTensor(), normalize])
     if args.ms:
         data = SegListMS(data_dir, phase, transforms.Compose(t), scales)
