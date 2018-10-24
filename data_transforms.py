@@ -396,6 +396,7 @@ class ToTensor(object):
             img = img.transpose(0, 1).transpose(0, 2).contiguous()
             # print(img.size())
         img = img.float().div(255)
+             
         if label is None:
             return img
         else:

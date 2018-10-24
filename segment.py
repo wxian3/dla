@@ -17,7 +17,7 @@ import torch.utils.data
 from torch import nn
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
-
+import torchvision
 import dla_up
 import data_transforms as transforms
 import dataset
@@ -87,7 +87,7 @@ class SegList(torch.utils.data.Dataset):
         
         # data = list(self.transforms(*data))
         data = list(self.transforms(d) for d in data)
-        
+         
         if self.out_name:
             if self.label_list is None:
                 data.append(data[0][0, :, :])
@@ -176,8 +176,14 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10):
 
         # compute output
         output = model(input_var)[0]
-        loss = criterion(output, target_var)
-
+        ch = output.size(1)  
+        _pred = output.permute(0, 2, 3, 1).contiguous().view(-1,ch)
+        _gt = target_var.permute(0, 2, 3, 1).contiguous().view(-1,ch) 
+        _gt = _gt * 2.0 - 1
+        _pred = nn.functional.normalize(_pred, dim=1)
+        output = _pred.view(output.size(0), output.size(2), output.size(3),3)  
+        cos_label = torch.ones(_gt.size(0)).cuda()   
+        loss = criterion(_pred, _gt, cos_label)
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
         losses.update(loss.data[0], input.size(0))
@@ -262,7 +268,14 @@ def train(train_loader, model, criterion, optimizer, epoch,
 
         # compute output
         output = model(input_var)[0]
-        loss = criterion(output, target_var)
+        ch = output.size(1)
+        _pred = output.permute(0, 2, 3, 1).contiguous().view(-1,ch)
+        _gt = target_var.permute(0, 2, 3, 1).contiguous().view(-1,ch)
+        _gt = _gt * 2.0 - 1
+        _pred = nn.functional.normalize(_pred, dim=1)
+        output = _pred.view(output.size(0), output.size(2), output.size(3),3)
+        cos_label = torch.ones(_gt.size(0)).cuda()
+        loss = criterion(_pred, _gt, cos_label)
 
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
@@ -278,7 +291,7 @@ def train(train_loader, model, criterion, optimizer, epoch,
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-
+        
         if i % print_freq == 0:
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -315,7 +328,8 @@ def train_seg(args):
         criterion = nn.NLLLoss2d(ignore_index=255, weight=weight)
     else:
         # criterion = nn.NLLLoss2d(ignore_index=255)
-        criterion = nn.MSELoss()
+        # criterion = nn.MSELoss()
+        criterion = nn.CosineEmbeddingLoss() 
 
     criterion.cuda()
 
@@ -438,9 +452,11 @@ def save_output_images(predictions, filenames, output_dir, sizes=None):
     """
     # pdb.set_trace()
     for ind in range(len(filenames)):
-        pred = predictions[ind]
-        pred = np.transpose(pred, (1, 2, 0))
-        pred = pred * 255.0 
+        pred = predictions[ind] 
+        #pred = np.transpose(pred, (1, 2, 0)) 
+        #print(pred.shape)
+        pred = (pred + 1) * 127.5
+        #print(pred.shape)
         im = Image.fromarray(pred.astype(np.uint8))
         #if sizes is not None:
         #    im = crop_image(im, sizes[ind])
@@ -494,12 +510,18 @@ def test(eval_data_loader, model, num_classes,
         #h, w = image.size()[2:4]
         #outputs = [final.data]
         #pred = sum([resize_4d_tensor(out, w, h) for out in outputs])
+        ch = final.size(1)
+        _final = final.permute(0, 2, 3, 1).contiguous().view(-1,ch)
+        _final = torch.nn.functional.normalize(_final, dim=1)
+        final = _final.view(final.size(0), final.size(2), final.size(3),3)
         pred = final.cpu().data.numpy()
         batch_time.update(time.time() - end)
         #prob = torch.exp(final)
         #print(pred.shape)
         
         if save_vis:
+            #torchvision.utils.save_image(final[0], name[0],
+            #                            nrow=1, normalize=True)
             save_output_images(pred, name, output_dir, size)
             #if prob.size(1) == 2:
             #    save_prob_images(prob, name, output_dir + '_prob', size)
